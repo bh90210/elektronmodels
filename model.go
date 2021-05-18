@@ -1,8 +1,11 @@
 package elektronmodels
 
 import (
+	"fmt"
+	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gitlab.com/gomidi/midi"
@@ -10,10 +13,17 @@ import (
 	driver "gitlab.com/gomidi/rtmididrv"
 )
 
-type track uint8
+type model string
 
 const (
-	T1 track = iota
+	CYCLES  model = "Model:Cycles"
+	SAMPLES model = "Model:Samples"
+)
+
+type voice int8
+
+const (
+	T1 voice = iota
 	T2
 	T3
 	T4
@@ -21,23 +31,10 @@ const (
 	T6
 )
 
-type cctrack uint8
+type notes int8
 
 const (
-	cct1 cctrack = 0xB0
-	cct2 cctrack = 0xB1
-	cct3 cctrack = 0xB2
-	cct4 cctrack = 0xB3
-	cct5 cctrack = 0xB4
-	cct6 cctrack = 0xB5
-)
-
-type cc struct {
-	pamVal map[Parameter]uint8
-}
-
-const (
-	A0 uint8 = iota + 21
+	A0 notes = iota + 21
 	As0
 	B0
 	C1
@@ -125,47 +122,65 @@ const (
 	As7
 	B7
 	C8
+	Cs8
+	D8
+	Ds8
+	E8
+	F8
+	Fs8
+	G8
+	Gs8
+	A8
+	As8
+	B8
 
-	Bf0 uint8 = As0
-	Df1 uint8 = Cs1
-	Ef1 uint8 = Ds1
-	Gf1 uint8 = Fs1
-	Af1 uint8 = Gs1
-	Bf1 uint8 = As1
-	Df2 uint8 = Cs2
-	Ef2 uint8 = Ds2
-	Gf2 uint8 = Fs2
-	Af2 uint8 = Gs2
-	Bf2 uint8 = As2
-	Df3 uint8 = Cs3
-	Ef3 uint8 = Ds3
-	Gf3 uint8 = Fs3
-	Af3 uint8 = Gs3
-	Bf3 uint8 = As3
-	Df4 uint8 = Cs4
-	Ef4 uint8 = Ds4
-	Gf4 uint8 = Fs4
-	Af4 uint8 = Gs4
-	Bf4 uint8 = As4
-	Df5 uint8 = Cs5
-	Ef5 uint8 = Ds5
-	Gf5 uint8 = Fs5
-	Af5 uint8 = Gs5
-	Bf5 uint8 = As5
-	Df6 uint8 = Cs6
-	Ef6 uint8 = Ds6
-	Gf6 uint8 = Fs6
-	Af6 uint8 = Gs6
-	Bf6 uint8 = As6
-	Df7 uint8 = Cs7
-	Ef7 uint8 = Ds7
-	Gf7 uint8 = Fs7
-	Af7 uint8 = Gs7
-	Bf7 uint8 = As7
+	Bf0 notes = As0
+	Df1 notes = Cs1
+	Ef1 notes = Ds1
+	Gf1 notes = Fs1
+	Af1 notes = Gs1
+	Bf1 notes = As1
+	Df2 notes = Cs2
+	Ef2 notes = Ds2
+	Gf2 notes = Fs2
+	Af2 notes = Gs2
+	Bf2 notes = As2
+	Df3 notes = Cs3
+	Ef3 notes = Ds3
+	Gf3 notes = Fs3
+	Af3 notes = Gs3
+	Bf3 notes = As3
+	Df4 notes = Cs4
+	Ef4 notes = Ds4
+	Gf4 notes = Fs4
+	Af4 notes = Gs4
+	Bf4 notes = As4
+	Df5 notes = Cs5
+	Ef5 notes = Ds5
+	Gf5 notes = Fs5
+	Af5 notes = Gs5
+	Bf5 notes = As5
+	Df6 notes = Cs6
+	Ef6 notes = Ds6
+	Gf6 notes = Fs6
+	Af6 notes = Gs6
+	Bf6 notes = As6
+	Df7 notes = Cs7
+	Ef7 notes = Ds7
+	Gf7 notes = Fs7
+	Af7 notes = Gs7
+	Bf7 notes = As7
+	Df8 notes = Cs8
+	Ef8 notes = Ds8
+	Gf8 notes = Fs8
+	Af8 notes = Gs8
+	Bf8 notes = As8
 )
 
+type Chords int8
+
 const (
-	Unisonx2 uint8 = iota
+	Unisonx2 Chords = iota
 	Unisonx3
 	Unisonx4
 	Minor
@@ -205,18 +220,20 @@ const (
 	Fifths
 )
 
-type note struct {
-	dur *time.Duration
-	key uint8
-}
-
-type Parameter uint8
+type Parameter int8
 
 const (
 	NOTE       Parameter = 3
 	TRACKLEVEL Parameter = 17
 	MUTE       Parameter = 94
 	PAN        Parameter = 10
+	SWEEP      Parameter = 18
+	CONTOUR    Parameter = 19
+	DELAY      Parameter = 12
+	REVERB     Parameter = 13
+	VOLUMEDIST Parameter = 7
+	SWING      Parameter = 15
+	CHANCE     Parameter = 14
 
 	// model:cycles
 	MACHINE     Parameter = 64
@@ -224,6 +241,8 @@ const (
 	DECAY       Parameter = 80
 	COLOR       Parameter = 16
 	SHAPE       Parameter = 17
+	PUNCH       Parameter = 66
+	GATE        Parameter = 67
 
 	// model:samples
 	PITCH        Parameter = 16
@@ -231,25 +250,18 @@ const (
 	SAMPLELENGTH Parameter = 20
 	CUTOFF       Parameter = 74
 	RESONANCE    Parameter = 71
+	LOOP         Parameter = 17
+	REVERSE      Parameter = 18
+)
 
-	// model:cycles
-	PUNCH Parameter = 66
-	GATE  Parameter = 67
+const (
+	DELAYTIME Parameter = iota + 85
+	DELAYFEEDBACK
+	REVERBSIZE
+	REVERBTONE
+)
 
-	// model:samples
-	LOOP    Parameter = 17
-	REVERSE Parameter = 18
-
-	SWEEP   Parameter = 18
-	CONTOUR Parameter = 19
-	DELAY   Parameter = 12
-	REVERB  Parameter = 13
-
-	VOLUMEDIST Parameter = 7
-	SWING      Parameter = 15
-	CHANCE     Parameter = 14
-
-	// LFO section
+const (
 	LFOSPEED Parameter = iota + 102
 	LFOMULTIPIER
 	LFOFADE
@@ -258,576 +270,462 @@ const (
 	LFOSTARTPHASE
 	LFORESET
 	LFODEPTH
-	// LFOMULTIPIER  Parameter = 103
-	// LFOFADE       Parameter = 104
-	// LFODEST       Parameter = 105
-	// LFOWAVEFORM   Parameter = 106
-	// LFOSTARTPHASE Parameter = 107
-	// LFORESET      Parameter = 108
-	// LFODEPTH      Parameter = 109
-
-	// FX section
-	DELAYTIME Parameter = iota + 85
-	DELAYFEEDBACK
-	REVERBZISE
-	REBERBTONE
-	// DELAYFEEDBACK Parameter = 86
-	// REVERBZISE    Parameter = 87
-	// REBERBTONE    Parameter = 88
 )
 
-const (
-	LNONE  Parameter = 0
-	LPITCH Parameter = 9
+// ??
+// const (
+// 	LNONE  Parameter = 0
+// 	LPITCH Parameter = 9
 
-	LCOLOR Parameter = iota + 9
-	LSHAPE
-	LSWEEP
-	LCONTOUR
-	LPAW
-	LGATE
-	LFTUN
-	LDECAY
-	LDIST
-	LDELAY
-	LREVERB
-	LPAN
+// 	LCOLOR Parameter = iota + 9
+// 	LSHAPE
+// 	LSWEEP
+// 	LCONTOUR
+// 	LPAW
+// 	LGATE
+// 	LFTUN
+// 	LDECAY
+// 	LDIST
+// 	LDELAY
+// 	LREVERB
+// 	LPAN
+// )
+
+type machine int8
+
+const (
+	KICK machine = iota + 1
+	SNARE
+	METAL
+	PERC
+	TONE
+	CHORD
 )
 
-type ScaleMode bool
+type scaleMode bool
 
 const (
-	PTN ScaleMode = true
-	TRK ScaleMode = false
+	PTN scaleMode = true
+	TRK scaleMode = false
 )
 
 // Project .
 type Project struct {
-	patterns []*Pattern
-
-	drv midi.Driver
-	mu  *sync.Mutex
-
-	in  midi.In
-	out midi.Out
-
-	wr *writer.Writer
+	Pattern map[int]*pattern
+	model   model
+	mu      *sync.Mutex
 }
 
-// Pattern .
-type Pattern struct {
-	scale  *Scale
-	tracks [6]*Track
+type pattern struct {
+	T1    *track
+	T2    *track
+	T3    *track
+	T4    *track
+	T5    *track
+	T6    *track
+	tempo float64
 }
 
-// Track .
-type Track struct {
-	scale  *Scale
-	preset *Preset
-	trigs  []*Trig
+type track struct {
+	Scale  *scale
+	Preset Preset
+	Trig   map[int]*trig
+	mu     *sync.Mutex
+}
+
+type scale struct {
+	mod scaleMode
+	len int
+	scl float64
+	chg int8
 }
 
 // Preset .
-type Preset struct {
-	parameters map[Parameter]uint8
+type Preset map[Parameter]int8
+
+type trig struct {
+	Note *note
+	Lock *Lock
 }
 
-// Scale .
-type Scale struct {
-	// Cycle manuel '9.11 Scale Menu'.
-	// If true Scale Mode is set to PATTERN
-	// if false to TRACK.
-	mod ScaleMode
-	// Length sets the step length of thew pattern/track.
-	len int
-	// Scale controls the speed of the playback in multiples of the current tempo.
-	scl int
-	chg int
-}
-
-// Trig .
-type Trig struct {
-	preset *Preset
-	lock   *Lock
+type note struct {
+	key      notes
+	length   float64
+	velocity int8
 }
 
 // Lock .
 type Lock struct {
-	preset *Preset
+	// conditional *Condition
+	Preset  Preset
+	Machine machine
 }
 
-func NewProject() *Project {
+// Sequencer .
+type Sequencer struct {
+	*Project
+	// midi fields
+	drv midi.Driver
+	mu  *sync.Mutex
+	in  midi.In
+	out midi.Out
+	wr  *writer.Writer
+
+	// playtime fields
+	tempo          chan float64
+	patternLength  int
+	patternRunning int
+}
+
+// NewProject initiates and returns a *Project struct.
+// TODO: better documentation
+func NewProject(m model) *Project {
+	return &Project{model: m, Pattern: make(map[int]*pattern), mu: &sync.Mutex{}}
+}
+
+// InitPattern initiates a new pattern for the selected position.
+// The equivalent of storing a pattern on ie. T1 trig 1.
+func (p *Project) InitPattern(position int) {
+	p.mu.Lock()
+	p.Pattern[position] = &pattern{
+		T1: &track{Scale: &scale{PTN, 15, 4.0, 0}, Preset: defaultT1(), Trig: make(map[int]*trig), mu: p.mu},
+		T2: &track{Scale: &scale{PTN, 15, 4.0, 0}, Preset: defaultT2(), Trig: make(map[int]*trig), mu: p.mu},
+		T3: &track{Scale: &scale{PTN, 15, 4.0, 0}, Preset: defaultT3(), Trig: make(map[int]*trig), mu: p.mu},
+		T4: &track{Scale: &scale{PTN, 15, 4.0, 0}, Preset: defaultT4(), Trig: make(map[int]*trig), mu: p.mu},
+		T5: &track{Scale: &scale{PTN, 15, 4.0, 0}, Preset: defaultT5(), Trig: make(map[int]*trig), mu: p.mu},
+		T6: &track{Scale: &scale{PTN, 15, 4.0, 0}, Preset: defaultT6(), Trig: make(map[int]*trig), mu: p.mu},
+	}
+	p.mu.Unlock()
+}
+
+func (p *Project) Sequencer() (*Sequencer, error) {
+	mu := &sync.Mutex{}
 	drv, err := driver.New()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	mu := &sync.Mutex{}
-	project := &Project{
+	sequencer := &Sequencer{
 		drv: drv,
 		mu:  mu,
 	}
 
 	// find elektron and assign it to in/out
+	var helperIn, helperOut bool
 	mu.Lock()
 	ins, _ := drv.Ins()
 	for _, in := range ins {
-		if strings.Contains(in.String(), "Model:Cycles") {
-			project.in = in
+		if strings.Contains(in.String(), string(p.model)) {
+			sequencer.in = in
+			helperIn = true
 		}
 	}
 	outs, _ := drv.Outs()
 	for _, out := range outs {
-		if strings.Contains(out.String(), "Model:Cycles") {
-			project.out = out
+		if strings.Contains(out.String(), string(p.model)) {
+			sequencer.out = out
+			helperOut = true
 		}
 	}
-	project.in.Open()
-	project.out.Open()
-	wr := writer.New(project.out)
-	project.wr = wr
+	// check if nothing found
+	if !helperIn && !helperOut {
+		return nil, fmt.Errorf("device %s not found", p.model)
+	}
+
+	err = sequencer.in.Open()
+	if err != nil {
+		return nil, err
+	}
+
+	err = sequencer.out.Open()
+	if err != nil {
+		return nil, err
+	}
+
+	wr := writer.New(sequencer.out)
+	sequencer.wr = wr
 	mu.Unlock()
 
-	return project
+	return sequencer, nil
 }
 
-func (p *Project) AddPattern(pattern ...*Pattern) {
-	p.patterns = append(p.patterns, pattern...)
+// CopyPattern copies the input source pattern to caller destination.
+func (p *pattern) CopyPattern(src *pattern) {
+	*p = *src
 }
 
-func (p *Project) Play() {
-	writer.NoteOn(p.wr, 64, 120)
+// SetTempo .
+func (p *pattern) SetTempo(tempo float64) {
+	p.tempo = tempo
 }
 
-func (p *Project) Stop() {
+// SetScale sets a new scale for the track.
+// If not set a default one is used.
+func (t *track) SetScale(mod scaleMode, length int, scl float64, chg int8) {
+	t.Scale.mod = mod
+	t.Scale.len = length
+	t.Scale.scl = scl
+	t.Scale.chg = chg
+}
+
+// CopyTrack copies a track from input source to caller destination.
+func (t *track) CopyTrack(src *track) {
+	*t = *src
+}
+
+// InitTrig initiates a trigger note and places it to designated position of trigs map (map[int]*trig).
+// All triggers need to be initiated first so the appropriate memeroy allocation takes place.
+// If you do not init your trigs you will get panic: runtime error.
+func (t *track) InitTrig(position int) {
+	t.mu.Lock()
+	t.Trig[position] = &trig{&note{C4, 4, 126}, &Lock{}}
+	t.mu.Unlock()
+}
+
+// SetMod Mode can be set to either PTN (pattern) or TRK (track). In PTN mode all tracks share the same
+// SCALE and LENGTH settings. In TRK mode, all tracks can have individual SCALE and LENGTH settings.
+func (s *scale) SetMod(mod scaleMode) {
+	s.mod = mod
+}
+
+// SetLen sets the step length (amount of steps) of the pattern/track.
+func (s *scale) SetLen(length int) {
+	s.len = length
+}
+
+// SetScl controls the speed the playback in multiples of the current tempo. It offers seven possible
+// settings, 1/8X, 1/4X, 1/2X, 3/4X, 1X, 3/2X and 2X. A setting of 1/8X plays back the pattern at one-eighth of
+// the set tempo. 3/4X plays the pattern back at three-quarters of the tempo; 3/2X plays back the pattern
+// twice as fast as the 3/4X setting. 2X makes the pattern play at twice the BPM.
+func (s *scale) SetScl(scl float64) {
+	s.scl = scl
+}
+
+// SetChg controls for how long the active pattern plays before it loops or a cued (the next selected) pattern begins to play. If CHG is set to 64, the pattern behaves like a pattern consisting of 64 steps
+// regarding cueing and chaining. If CHG is set to OFF, the default change length is INF (infinite) in TRACK
+// mode and the same value as LEN in PATTERN mode.
+func (s *scale) SetChg(chg int8) {
+	s.chg = chg
+}
+
+// SetParameter .
+func (p Preset) Parameter(parameter Parameter, value int8) {
+	p[parameter] = value
+}
+
+// SetNote .
+func (t *trig) SetNote(key notes, length float64, velocity int8) {
+	t.Note.key = key
+	t.Note.length = length
+	t.Note.velocity = velocity
+}
+
+// CopyTrig .
+func (t *trig) CopyTrig(src *trig) {
+	*t = *src
+}
+
+// SetKey .
+func (n *note) SetKey(key notes) {
+	n.key = key
+}
+
+// SetLength Trig Length sets the duration of the notes. When a note has finished playing a NOTE OFF command
+// is sent. The INF setting equals infinite note length. This parameter only applies if GATE is set to ON or
+// when sending trig length data over MIDI. (0.125–128, INF)
+func (n *note) SetLength(length float64) {
+	n.length = length
+}
+
+// SetVelocity .
+func (n *note) SetVelocity(velocity int8) {
+	n.velocity = velocity
+}
+
+// CopyNote .
+func (n *note) CopyNote(src *note) {
+	*n = *src
+}
+
+// SetMachine .
+func (l *Lock) SetMachine(m machine) {
+	l.Machine = m
+}
+
+func (p *Sequencer) Play(position ...int) error {
+	// check for errors in current pattern
+
+	// check for warnings of the existing and incoming patterns
+
+	// analyze scale
+
+	// current pattern play
+
+	var count int64
+
+	block := make(chan bool)
+	p.tempo = make(chan float64)
+
+	tick := time.NewTicker(time.Duration(60000/60.0) * time.Millisecond)
+	go func() {
+	loop:
+		for {
+			select {
+			case newTempo := <-p.tempo:
+				tick.Reset(time.Duration(60000/newTempo) * time.Millisecond)
+			case <-tick.C:
+				if count == 20 {
+					tick.Stop()
+					close(p.tempo)
+					// break loop
+					block <- true
+					break loop
+				}
+				log.Println(atomic.AddInt64(&count, 1))
+			}
+		}
+	}()
+
+	time.Sleep(10 * time.Second)
+	p.tempo <- 120.5
+
+	<-block
+
+	return nil
+
+	// for {
+	// 	p.cc(T1, CYCLESPITCH, 50)
+	// 	p.noteon(T1, E5, 126)
+	// 	time.Sleep(750 * time.Millisecond)
+	// 	p.noteoff(T1, E5)
+
+	// 	p.cc(T1, CYCLESPITCH, 70)
+	// 	p.noteon(T1, C4, 127)
+	// 	// p.cc(T1, MACHINE, 1)
+	// 	time.Sleep(500 * time.Millisecond)
+	// 	p.noteoff(T1, C4)
+
+	// 	p.cc(T1, MACHINE, int(rand.Intn(5)))
+	// 	p.cc(T1, CYCLESPITCH, 80)
+	// 	p.noteon(T1, F4, 127)
+	// 	// p.cc(T1, MACHINE, 2)
+	// 	time.Sleep(500 * time.Millisecond)
+	// 	p.noteoff(T1, F4)
+
+	// 	p.cc(T1, MACHINE, 0)
+	// 	// p.cc(T1, CYCLESPITCH, 90)
+	// 	p.cc(T1, CYCLESPITCH, int(rand.Intn(126)))
+	// 	p.cc(T1, DECAY, int(rand.Intn(126)))
+	// 	p.cc(T1, COLOR, int(rand.Intn(126)))
+	// 	p.cc(T1, SHAPE, int(rand.Intn(126)))
+	// 	p.cc(T1, SWEEP, int(rand.Intn(126)))
+	// 	p.cc(T1, CONTOUR, int(rand.Intn(126)))
+	// 	p.noteon(T1, A4, 127)
+	// 	time.Sleep(250 * time.Millisecond)
+	// 	p.noteoff(T1, A4)
+	// }
+}
+
+// Next 	// can be used without a number too - if used without a number and there is no next currently playing pattern keeps on looping
+// if used and not found, an empty default pattern should be returned - silence
+// Second number indicates jump to specific pattern number rather the next in line.
+func (p *Sequencer) Next(patternNumber ...int) {
 
 }
 
-func (p *Project) Next(patternNumber ...int) {
+// Pause .
+func (p *Sequencer) Pause() {
 
 }
 
-func (p *Project) SetVolume() {
+// Stop .
+func (p *Sequencer) Stop() {
+
+}
+
+func (p *Sequencer) Tempo(bpm float64) {
+
+}
+
+// SetVolume .
+func (p *Sequencer) Volume(value int8) {
 
 }
 
 // Close midi connection.
-func (p *Project) Close() {
+func (p *Sequencer) Close() {
 	p.out.Close()
 }
 
-func NewPattern(scale *Scale) *Pattern {
-	var tracks [6]*Track
-	// for i := range tracks {
-	// 	tracks[i] = new(Track)
-	// }
-	pattern := &Pattern{scale, tracks}
-
-	return pattern
+func (p *Sequencer) noteon(t voice, n notes, vel int8) {
+	p.mu.Lock()
+	p.wr.SetChannel(uint8(t))
+	writer.NoteOn(p.wr, uint8(n), uint8(vel))
+	p.mu.Unlock()
 }
 
-func NewPatternFrom(pattern *Pattern) *Pattern {
-	// var copy *Pattern
-	// *copy = *pattern
-	copy := pattern
-	return copy
+func (p *Sequencer) noteoff(t voice, n notes) {
+	p.mu.Lock()
+	p.wr.SetChannel(uint8(t))
+	writer.NoteOff(p.wr, uint8(n))
+	p.mu.Unlock()
 }
 
-func (p *Pattern) ScaleSetup(s *Scale) {
-	p.scale = s
+func (p *Sequencer) cc(t voice, par Parameter, val int8) {
+	p.mu.Lock()
+	p.wr.SetChannel(uint8(t))
+	writer.ControlChange(p.wr, uint8(par), uint8(val))
+	p.mu.Unlock()
 }
 
-func (p *Pattern) T1(t *Track) {
-	p.tracks[0] = t
+func (p *Sequencer) pc(t voice, pc int8) {
+	p.mu.Lock()
+	p.wr.SetChannel(uint8(t))
+	writer.ProgramChange(p.wr, uint8(pc))
+	p.mu.Unlock()
 }
 
-func (p *Pattern) T2(t *Track) {
-	p.tracks[1] = t
-}
-
-func (p *Pattern) T3(t *Track) {
-	p.tracks[2] = t
-}
-
-func (p *Pattern) T4(t *Track) {
-	p.tracks[3] = t
-}
-
-func (p *Pattern) T5(t *Track) {
-	p.tracks[4] = t
-}
-
-func (p *Pattern) T6(t *Track) {
-	p.tracks[5] = t
-}
-
-func NewTrack() *Track {
-	p := NewPreset()
-	newt := &Track{preset: p}
-	return newt
-}
-
-func (t *Track) SetScale(s *Scale) {
-	t.scale = s
-}
-
-func (t *Track) SetPreset(p *Preset) {
-	t.preset = p
-}
-
-func (t *Track) AddTrigs(trigs ...*Trig) {
-	t.trigs = append(t.trigs, trigs...)
-}
-
-func NewPreset(preset ...map[Parameter]uint8) *Preset {
-	if preset != nil {
-		return &Preset{parameters: preset[0]}
-	}
-	p := make(map[Parameter]uint8)
-	defaultPreset(p)
-	return &Preset{parameters: p}
-}
-
-func (p *Preset) SetParameter(param Parameter, value uint8) {
-	p.parameters[param] = value
-}
-
-func NewScale(mod ScaleMode, len, scl, chg int) *Scale {
-	scale := &Scale{mod, len, scl, chg}
-	return scale
-}
-
-func (s *Scale) SetMod(m ScaleMode) {
-	s.mod = m
-}
-
-func (s *Scale) SetLen(l int) {
-	s.len = l
-}
-
-func (s *Scale) SetScl(scl int) {
-	s.scl = scl
-}
-
-func (s *Scale) SetChg(c int) {
-	s.chg = c
-}
-
-func NewTrig() *Trig {
-	return &Trig{}
-}
-
-func (t *Trig) SetPreset(p *Preset) {
-	t.preset = p
-}
-
-func (t *Trig) SetLock(l *Lock) {
-	t.lock = l
-}
-
-func NewLock() *Lock {
-	return &Lock{}
-}
-
-func (l *Lock) SetPreset(p *Preset) {
-	l.preset = p
-}
-
-func defaultPreset(p map[Parameter]uint8) {
+func (p *Sequencer) unlockPreset() {
 
 }
 
-// func (p *Project) ScaleMode(opt bool) {
-// 	// switch opt {
-// 	// case true:
-// 	// 	p.
+func (p *Sequencer) unlockMachine() {
 
-// 	// }
+}
 
-// }
+// default presets for voices 1-6
+func defaultT1() Preset {
+	d := make(map[Parameter]int8)
+	d[COLOR] = 10
+	return d
+}
 
-// type Trig struct {
-// 	track
-// 	note
-// 	cctrack
-// 	level uint8
-// 	dur   *time.Duration
-// 	*cc
-// 	beat     uint8
-// 	lastBeat bool
-// 	hasCC    bool
-// 	hasNote  bool
-// }
+func defaultT2() Preset {
+	d := make(map[Parameter]int8)
+	d[COLOR] = 10
+	return d
+}
 
-// func NewTrig(beat uint8) *Trig {
-// 	return &Trig{
-// 		beat: beat,
-// 	}
-// }
+func defaultT3() Preset {
+	d := make(map[Parameter]int8)
+	d[COLOR] = 10
+	return d
+}
 
-// func LastTrig(beat uint8) *Trig {
-// 	trig := Trig{
-// 		beat:     beat,
-// 		lastBeat: true,
-// 	}
-// 	return &trig
-// }
+func defaultT4() Preset {
+	d := make(map[Parameter]int8)
+	d[COLOR] = 10
+	return d
+}
 
-// func (t *Trig) Note(key uint8, level uint8, dur time.Duration) {
-// 	tn := &note{}
-// 	tn.key = key
-// 	tn.dur = &dur
+func defaultT5() Preset {
+	d := make(map[Parameter]int8)
+	d[COLOR] = 10
+	return d
+}
 
-// 	t.note = *tn
-// 	t.level = level
-// 	t.hasNote = true
-// }
-
-// func (t *Trig) CC(values map[Parameter]uint8) {
-// 	t.cc = &cc{
-// 		pamVal: values,
-// 	}
-// 	t.hasCC = true
-// }
-
-// type Track struct {
-// 	number *track
-// 	trig   []*Trig
-// }
-
-// func NewTrack(trackNumber track, variadicTracks []*Trig) *Track {
-// 	for _, v := range variadicTracks {
-// 		switch trackNumber {
-// 		case T1:
-// 			v.track = T1
-// 		case T2:
-// 			v.track = T2
-// 		case T3:
-// 			v.track = T3
-// 		case T4:
-// 			v.track = T4
-// 		case T5:
-// 			v.track = T5
-// 		case T6:
-// 			v.track = T6
-// 		}
-// 	}
-// 	track := Track{
-// 		number: &trackNumber,
-// 		trig:   variadicTracks,
-// 	}
-
-// 	return &track
-// }
-
-// type pattern struct {
-// 	tracks []*Track
-// }
-
-// type Project struct {
-// 	pattern []*pattern
-
-// 	drv midi.Driver
-// 	mu  *sync.Mutex
-
-// 	inPorts  map[int]midi.In
-// 	outPorts map[int]midi.Out
-
-// 	wr *writer.Writer
-
-// 	loop bool
-// }
-
-// func NewProject() (*Project, error) {
-// 	drv, mu, err := newmidi()
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	project := &Project{
-// 		drv: drv,
-// 		mu:  mu,
-// 	}
-
-// 	ii := make(map[int]midi.In)
-// 	oo := make(map[int]midi.Out)
-
-// 	mu.Lock()
-// 	ins, _ := drv.Ins()
-// 	for i, in := range ins {
-// 		ii[i] = in
-// 	}
-
-// 	outs, _ := drv.Outs()
-// 	for i, out := range outs {
-// 		oo[i] = out
-// 	}
-
-// 	project.inPorts = ii
-// 	project.outPorts = oo
-
-// 	// TODO: FIX THIS MESS
-// 	project.outPorts[1].Open()
-
-// 	wr := writer.New(project.outPorts[1])
-
-// 	project.wr = wr
-// 	mu.Unlock()
-
-// 	return project, nil
-// }
-
-// func (p *Project) Loop() {
-// 	p.loop = true
-// }
-
-// func (p *Project) Play() error {
-// 	// calculate how many patterns are present
-// 	totalPatters := len(p.pattern)
-// 	fmt.Println("Total Patterns: ", totalPatters)
-
-// 	// map[pattern'sBeatCounting]triggersForAll6tracks(ifPresent)
-// 	type tri map[int][]*Trig
-
-// 	// map[patternsLength]collectionOfArrangedTriggers
-// 	type timeline map[int]*tri
-
-// 	// init a key/value map acting as timeline for the song
-// 	timlin := make(timeline)
-
-// 	type patternsEnd map[int]int
-// 	ends := make(patternsEnd)
-
-// 	// range over patterns slice []pattern
-// 	for i, pattern := range p.pattern {
-// 		fmt.Println("Pattern: ", i)
-
-// 		patternTimeline := make(tri)
-// 		patternEndingHelper := make(patternsEnd)
-
-// 		totalTracks := len(pattern.tracks)
-// 		fmt.Println("Total Tracks: ", totalTracks)
-
-// 		// range over individual pattern's tracks
-// 		for tid, track := range pattern.tracks {
-// 			// count total trigs in track
-// 			trigsLength := len(track.trig)
-// 			fmt.Println("Track: ", track.number, " Total Trigs: ", trigsLength)
-
-// 			for ii := 0; ii < trigsLength; ii++ {
-// 				patternTimeline[int(track.trig[ii].beat)] = append(patternTimeline[int(track.trig[ii].beat)], track.trig[ii])
-
-// 				if track.trig[ii].lastBeat == true {
-// 					patternEndingHelper[tid] = int(track.trig[ii].beat)
-// 				}
-// 			}
-// 		}
-
-// 		// compare last beats to find where pattern ends
-// 		var longestBeat []int
-// 		for _, v := range patternEndingHelper {
-// 			longestBeat = append(longestBeat, int(v))
-// 		}
-// 		sorted := sort.IntSlice(longestBeat)
-
-// 		// assign pattern end to relevant map
-// 		last := len(sorted)
-// 		ends[i] = sorted[last-1]
-// 		timlin[i] = &patternTimeline
-// 	}
-
-// 	// range over timeline (map)
-// 	// each iteration return song's individual patterns in order
-// 	for k, pattern := range timlin {
-// 		beat := *pattern
-
-// 		// loop over patterns' trigs (beats) until ends[pattern]longestBeat
-// 		lastBeat := ends[k]
-// 		it := 0
-// 		tick := time.NewTicker(4000 * time.Millisecond)
-
-// 	loop:
-// 		for {
-// 			<-tick.C
-// 			totalTrigsForBeat := beat[it]
-// 			if len(totalTrigsForBeat) != 0 {
-// 				// total trigs for current beat range
-// 				for _, trig := range totalTrigsForBeat {
-// 					if trig.hasCC == true {
-// 						p.cc(&trig.track, trig.cc.pamVal)
-// 					}
-
-// 					if trig.hasNote == true {
-// 						p.note(&trig.track, &trig.note, trig.note.key, trig.level)
-// 					}
-// 				}
-
-// 				fmt.Println("lastbeat", lastBeat, "current beat", it)
-// 			}
-
-// 			if it == lastBeat-1 {
-// 				break loop
-// 			}
-// 			it++
-// 		}
-// 	}
-
-// 	return nil
-// }
-
-// func (c *Project) Pause() {
-// }
-
-// func (p *Project) Close() {
-// 	p.drv.Close()
-// }
-
-// func (t *Project) Pattern(variadicTracks ...*Track) {
-// 	pattern := &pattern{
-// 		tracks: variadicTracks,
-// 	}
-
-// 	t.pattern = append(t.pattern, pattern)
-// }
-
-// func (c *Project) note(track *track, note *note, key uint8, velocity uint8) {
-// 	timer := time.NewTimer(*note.dur)
-// 	// note on
-// 	c.mu.Lock()
-// 	c.wr.SetChannel(uint8(*track))
-// 	writer.NoteOn(c.wr, key, velocity)
-// 	c.mu.Unlock()
-
-// 	go func() {
-// 		<-timer.C
-// 		// note off
-// 		c.mu.Lock()
-// 		writer.NoteOff(c.wr, key)
-// 		c.mu.Unlock()
-// 	}()
-// }
-
-// func (c *Project) cc(track *track, ccvalues map[Parameter]uint8) {
-// 	for k, v := range ccvalues {
-// 		c.mu.Lock()
-// 		c.wr.SetChannel(uint8(*track))
-// 		// writer.ProgramChange()
-// 		writer.ControlChange(c.wr, uint8(k), v)
-// 		c.mu.Unlock()
-// 	}
-// }
-
-// // func (c *Cycles) pc(out *portmidi.Stream, track CCtrack, parameter Parameter, value int64) {
-// // }
-
-// func newmidi() (*driver.Driver, *sync.Mutex, error) {
-// 	var err error
-// 	drv, err := driver.New()
-// 	if err != nil {
-// 		panic("can't initialize driver")
-// 	}
-
-// 	mutex := &sync.Mutex{}
-
-// 	return drv, mutex, nil
-// }
+func defaultT6() Preset {
+	d := make(map[Parameter]int8)
+	d[COLOR] = 10
+	return d
+}
